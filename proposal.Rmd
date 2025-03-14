@@ -1,0 +1,30 @@
+---
+title: "STAT 447C Project Proposal"
+output: pdf_document
+---
+
+# Basic information
+Project author: Thomas Farrell (83869248)
+
+Project theme: time series models
+
+Project repo: [GitHub](https://github.com/Harmonious4/stat-447c-project)
+
+```{r include=FALSE}
+library(tidyverse)
+library(knitr)
+```
+
+# Dataset options
+1. Historical daily weather data from Vancouver Harbour CS, obtained from [Canadian Centre for Climate Services](https://climate-change.canada.ca/climate-data/#/daily-climate-data)
+
+```{r include=FALSE}
+data0 <- read_csv("data/climate-daily.csv") |> mutate(TOTAL_SNOW_FLAG = as.character(TOTAL_SNOW_FLAG))
+data1 <- read_csv("data/climate-daily (1).csv")
+data2 <- read_csv("data/climate-daily (2).csv")
+data3 <- read_csv("data/climate-daily (3).csv")
+data_raw <- bind_rows(data0, data1, data2, data3)
+```
+```{r echo=FALSE}
+data_raw |> sample_n(6) |> select(LOCAL_DATE, MIN_TEMPERATURE, MEAN_TEMPERATURE, MAX_TEMPERATURE, TOTAL_PRECIPITATION, TOTAL_RAIN, TOTAL_SNOW) |> kable(col.names = c("Date", "Min Temp", "Mean Temp", "Max Temp", "Total Precipitation", "Rain", "Snow"))
+```
