@@ -1,0 +1,6 @@
+---
+title: "STAT 447C Project Report"
+author: "Thomas Farrell"
+output: pdf_document
+---
+
