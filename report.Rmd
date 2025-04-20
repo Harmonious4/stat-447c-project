@@ -45,7 +45,7 @@ temp <- temp |> filter(date >= as.Date("1958-01-01"))
 temp_sampling <- temp_complete |> mutate(t = as.numeric(date - as.Date("2000-01-01"))/365.25)
 all_dates <- tibble(date = as.Date(as.Date("1958-01-01"):as.Date("2025-03-12")), missing = ifelse(date %in% temp_sampling$date, 0, 1 + !(date %in% temp$date)))
 ggplot(all_dates, aes(x = date, y = missing)) +
-  geom_point(size = 2, alpha = 0.015) +
+  geom_point(size = 1.5, alpha = 0.015) +
   scale_y_continuous(breaks = c(0, 1, 2), labels = c("Temperature is present", "Temperature is missing", "Row is missing entirely")) +
   labs(x = "Year") +
   theme(panel.grid.minor = element_blank(), axis.title.y = element_blank())
@@ -119,7 +119,7 @@ The intercept has posterior mean 11.1, indicating that the mean temperature for 
 
 The amplitude of seasonal variation is estimated to be 7.08 degrees Celsius, with 95% credible interval [6.95, 7.21], and the day of the year for which this model of seasonal variation negatively offsets the daily mean the most from the overall mean is January 20 (19 days after January 1), with the 95% credible interval for the location of this minimum also including January 19 and 21. This means that the typical daily mean temperature during the part of the year that is typically the coolest is about 7°C lower than the overall mean temperature (and vice versa for the part of the year that is typically the warmest).
 
-Finally, the overall mean temperature for Vancouver Harbour is estimated to be 11.8 degrees Celsius as of 2025 (95% credible interval [11.6, 12.1]), and the mean temperature in Vancouver is estimated to be currently increasing by 0.027 degrees Celsius per year, with 95% credible interval [0.015, 0.039].
+Finally, the annual mean temperature for Vancouver Harbour is currently estimated to be 11.8 degrees Celsius (95% credible interval [11.6, 12.1]), and this is estimated to be currently increasing by 0.027 degrees Celsius per year, with 95% credible interval [0.015, 0.039].
 
 ## Limitations
 This report covers only one modeling method and does not use any auxiliary variables, and limited computational power was available for the Markov chain Monte Carlo sampling. Alternative types of models, such as nonparametric models, could also suit this data. Inference could have been more robust without some of the measurements being missing, in particular those from the years 1963 to 1965. Furthermore, data was only examined from one location, so neither the inference conclusions nor the model used can effectively be generalized to other locations.
@@ -138,7 +138,7 @@ mcmc_trace(fit, pars = "cos_coef") + theme_minimal()
 mcmc_trace(fit, pars = "estimate2025") + theme_minimal()
 mcmc_trace(fit, pars = "slope2025") + theme_minimal()
 mcmc_trace(fit, pars = "amplitude") + theme_minimal()
-mcmc_trace(fit, pars = "max_day") + theme_minimal()
+mcmc_trace(fit, pars = "min_day") + theme_minimal()
 ```
 
 \newpage
@@ -219,7 +219,7 @@ all_dates <- tibble(date = as.Date(as.Date("1958-01-01"):as.Date("2025-03-12")),
                                      0,
                                      1 + !(date %in% temp$date)))
 ggplot(all_dates, aes(x = date, y = missing)) +
-  geom_point(size = 2, alpha = 0.015) +
+  geom_point(size = 1.5, alpha = 0.015) +
   scale_y_continuous(breaks = c(0, 1, 2), labels = c("Temperature is present",
                                                      "Temperature is missing",
                                                      "Row is missing entirely")) +
@@ -263,6 +263,6 @@ mcmc_trace(fit, pars = "cos_coef") + theme_minimal()
 mcmc_trace(fit, pars = "estimate2025") + theme_minimal()
 mcmc_trace(fit, pars = "slope2025") + theme_minimal()
 mcmc_trace(fit, pars = "amplitude") + theme_minimal()
-mcmc_trace(fit, pars = "max_day") + theme_minimal()
+mcmc_trace(fit, pars = "min_day") + theme_minimal()
 ```
 \normalsize
