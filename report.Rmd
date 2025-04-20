@@ -1,6 +1,268 @@
 ---
 title: "STAT 447C Project Report"
-author: "Thomas Farrell"
+author: "Thomas Farrell (83869248)"
 output: pdf_document
 ---
 
+Project repo: [\underline{GitHub}](https://github.com/Harmonious4/stat-447c-project)
+
+# Inference task
+Are temperatures in Vancouver getting warmer on average? If there is a warming trend, is it accelerating? This report aims to answer these questions by applying Bayesian methods to historical data from Vancouver Harbour, obtained from the [\underline{Canadian Centre for Climate Services}](https://climate-change.canada.ca/climate-data/#/daily-climate-data). This dataset includes daily mean temperatures in degrees Celsius, along with other meteorological measurements, for as long as records have been kept at this location.
+
+Answering these questions with this data will require accounting for the fact that the individual observations are not independent: they form a time series.
+
+```{r, include=FALSE}
+library(tidyverse)
+library(knitr)
+library(rstan)
+library(bayesplot)
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+```
+
+```{r, include=FALSE}
+data0 <- read_csv("data/climate-daily.csv") |> mutate(TOTAL_SNOW_FLAG = as.character(TOTAL_SNOW_FLAG))
+data1 <- read_csv("data/climate-daily (1).csv")
+data2 <- read_csv("data/climate-daily (2).csv")
+data3 <- read_csv("data/climate-daily (3).csv")
+data_raw <- bind_rows(data0, data1, data2, data3)
+```
+
+# Data analysis
+
+```{r, echo=FALSE}
+temp <- data_raw |> select(LOCAL_DATE, MEAN_TEMPERATURE)
+colnames(temp) <- c("date", "mean_temp")
+temp <- temp |> mutate(date = as.Date(date))
+temp_complete <- temp |> drop_na(mean_temp)
+kable(bind_rows(head(temp_complete, 3), tail(temp_complete, 3)))
+```
+
+Above are the first three (non-missing) rows and the last three rows provided. The data covers dates from January 1, 1958 to March 12, 2025, with many missing values.
+
+```{r, echo=FALSE, fig.height = 2}
+temp <- temp |> filter(date >= as.Date("1958-01-01"))
+temp_sampling <- temp_complete |> mutate(t = as.numeric(date - as.Date("2000-01-01"))/365.25)
+all_dates <- tibble(date = as.Date(as.Date("1958-01-01"):as.Date("2025-03-12")), missing = ifelse(date %in% temp_sampling$date, 0, 1 + !(date %in% temp$date)))
+ggplot(all_dates, aes(x = date, y = missing)) +
+  geom_point(size = 2, alpha = 0.015) +
+  scale_y_continuous(breaks = c(0, 1, 2), labels = c("Temperature is present", "Temperature is missing", "Row is missing entirely")) +
+  labs(x = "Year") +
+  theme(panel.grid.minor = element_blank(), axis.title.y = element_blank())
+```
+
+The data includes 1476 rows with missing temperature measurements, and 2308 days within the range of time covered by the data do not have rows provided at all. There are many more missing values on weekends than on weekdays, and missing values are more common on Mondays and Fridays than in the middle of the week. This suggests that some of the data collection was done manually and was less likely to be done when most people were home from work. There are also some long periods, up to three years long, of entirely missing rows.
+
+These missing values are clearly not missing completely at random, but inference is unlikely to be severely affected since most of the missingness appears to have an explanation unrelated to mean temperature.
+
+```{r, echo=FALSE}
+all_dates |> summarize(n = n(), missing_temp = sum(missing == 1), missing_entirely = sum(missing == 2)) |> kable()
+all_dates |> mutate(weekday = weekdays(date)) |> group_by(weekday) |>
+  summarize(missing = sum(missing != 0)) |> arrange(desc(missing)) |> kable()
+```
+
+The following five-year sample of the mean temperature measurements shows a clear seasonal cycle resembling a noisy sine wave, suggesting that it may be reasonable to model mean temperature using sinusoidal functions.
+
+```{r, echo=FALSE, fig.height = 4}
+temp_fiveyears <- temp_sampling |> filter(date > as.Date("1999-12-31"), date < as.Date("2005-01-01"))
+ggplot(temp_fiveyears, aes(x = date, y = mean_temp)) +
+  geom_point(alpha = 0.3) +
+  labs(x = "Year", y = "Mean temperature (°C)")
+```
+
+\newpage
+## Model
+The Bayesian model is as follows:
+
+$\beta_0 \sim \mathcal{N}(10, 10)$ \
+$\beta_1 \sim \mathcal{N}(0, 0.1)$ \
+$\beta_2 \sim \mathcal{N}(0, 0.01)$ \
+$\alpha \sim \text{Beta}(2, 2)$ \
+$\sigma \sim \text{Exp}(\frac{1}{2})$ \
+$\gamma_0 \sim \mathcal{N}(0, 10)$ \
+$\gamma_1 \sim \mathcal{N}(0, 10)$ \
+$\delta_i = \gamma_0 \sin(\frac{2 \pi}{365.25} t_i) + \gamma_1 \cos(\frac{2 \pi}{365.25} t_i)$ \
+$\mu_i = \beta_0 + \beta_1 t_i + \beta_2 t_i^2 + \delta_i$ \
+$y_i \sim \mathcal{N}(\mu_i + \alpha_1(y_{i-1} - \mu_{i-1}), \sigma)$, for $1 < i \leq n$
+
+For the purposes of the model, $t_i$ is the number of years since January 1, 2000 for observation $i$. $\beta_0$ is the intercept: the mean temperature for January 1, 2000 without taking into account daily, seasonal, or long-term variation. The prior is chosen to be Normal with mean 10 and standard deviation 10: a non-informative prior based on an estimate of the mean from the plot above. $\beta_1$ is the regression slope: the base annual rate of increase in mean temperature (without taking into account any potential acceleration). $\beta_2$ represents the acceleration of the increase in mean temperature, in degrees Celsius per year squared. The priors for $\beta_1$ and $\beta_2$ are chosen to be Normal with mean 0 and standard deviations that are relatively large given the context, so as not to introduce any prior belief about whether a long-term trend exists.
+
+Seasonal variation is modeled as $\delta$, which is a sum of sinusoidal functions with a period of one year. $\gamma_0$ and $\gamma_1$ together specify the phase and amplitude of seasonal variation, with priors again chosen to be zero-mean Normal distributions. The standard deviations are chosen to be 10 to allow seasonal variation of no more than a few tens of degrees. $\mu_i$ is the mean temperature for row $i$ including long-term and seasonal but not daily variation.
+
+Daily variation is modeled with two components. Since temperature tends to vary on the scale of more than one day, with heat waves or cold snaps potentially lasting several days, the model takes into account the temperature of the previous day for any given observation. $\alpha$ represents how strongly temperatures tend to return to the seasonal mean after an extreme day (with values close to 0 meaning that temperatures return to the mean faster), while $\sigma$ accounts for other sources of daily variation, including but not limited to potential measurement error. The prior for $\alpha$ is chosen to be a symmetric Beta with both parameters equal to 2, since neither negative values nor values greater than 1 make sense in context, and in order to prefer values that are not very close to either 0 or 1. An exponential prior with rate $\frac{1}{2}$ is chosen for $\sigma$, since the standard deviation of a Normal must be positive, and the rate parameter $\frac{1}{2}$ is chosen to be relatively uninformative.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, cache=TRUE, results='hide'}
+fit = stan(
+  file = "temperature.stan",
+  data = list(N = nrow(temp_sampling), t = temp_sampling$t, y = temp_sampling$mean_temp),
+  seed = 447,
+  chains = 2,
+  iter = 1000,
+  refresh = 20)
+```
+
+## Inference
+\small
+``` {r, echo=FALSE, cache=TRUE}
+results <- summary(fit)$summary |> as.data.frame() |> mutate(across(everything(), ~ as.character(signif(., 3))))
+bind_rows(head(results, 7), head(tail(results, 5), 4)) |> select(-10) |> kable()
+```
+\normalsize
+
+The Markov chains do not seem to have had problems mixing: the trace plot shown below for the intercept parameter does not appear to show any evidence of the samples coming from each chain being different. (Similar plots for the other parameters and generated quantities are provided in the appendix.)
+
+``` {r, echo=FALSE, fig.height = 3} 
+mcmc_trace(fit, pars = "intercept") + theme_minimal()
+```
+
+The intercept has posterior mean 11.1, indicating that the mean temperature for Vancouver Harbour is estimated to be 11.1°C for the year 2000, with 95% credible interval [11.0, 11.3]. The slope parameter has posterior mean 0.027, and its 95% credible interval excludes zero. This means we can be confident that the mean temperature in Vancouver has actually increased since 1958 at an estimated rate of between 0.0213 and 0.0336 degrees Celsius per year. On the other hand, the 95% credible interval for the quadratic term includes zero, so we do not have evidence to suggest that this warming is either accelerating or slowing down.
+
+The amplitude of seasonal variation is estimated to be 7.08 degrees Celsius, with 95% credible interval [6.95, 7.21], and the day of the year for which this model of seasonal variation negatively offsets the daily mean the most from the overall mean is January 20 (19 days after January 1), with the 95% credible interval for the location of this minimum also including January 19 and 21. This means that the typical daily mean temperature during the part of the year that is typically the coolest is about 7°C lower than the overall mean temperature (and vice versa for the part of the year that is typically the warmest).
+
+Finally, the overall mean temperature for Vancouver Harbour is estimated to be 11.8 degrees Celsius as of 2025 (95% credible interval [11.6, 12.1]), and the mean temperature in Vancouver is estimated to be currently increasing by 0.027 degrees Celsius per year, with 95% credible interval [0.015, 0.039].
+
+## Limitations
+This report covers only one modeling method and does not use any auxiliary variables, and limited computational power was available for the Markov chain Monte Carlo sampling. Alternative types of models, such as nonparametric models, could also suit this data. Inference could have been more robust without some of the measurements being missing, in particular those from the years 1963 to 1965. Furthermore, data was only examined from one location, so neither the inference conclusions nor the model used can effectively be generalized to other locations.
+
+\newpage
+# Appendix
+
+## Model diagnostic plots
+``` {r, echo=FALSE, fig.height = 2}
+mcmc_trace(fit, pars = "slope") + theme_minimal()
+mcmc_trace(fit, pars = "quadratic") + theme_minimal()
+mcmc_trace(fit, pars = "previous_coef") + theme_minimal()
+mcmc_trace(fit, pars = "sigma") + theme_minimal()
+mcmc_trace(fit, pars = "sin_coef") + theme_minimal()
+mcmc_trace(fit, pars = "cos_coef") + theme_minimal()
+mcmc_trace(fit, pars = "estimate2025") + theme_minimal()
+mcmc_trace(fit, pars = "slope2025") + theme_minimal()
+mcmc_trace(fit, pars = "amplitude") + theme_minimal()
+mcmc_trace(fit, pars = "max_day") + theme_minimal()
+```
+
+\newpage
+## Stan code
+\footnotesize
+```
+data {
+  int N;
+  vector[N] t;
+  vector[N] y;
+}
+
+parameters {
+  real intercept;
+  real slope;
+  real quadratic;
+  real<lower=0,upper=1> previous_coef;
+  real<lower=0,upper=1> previous_2_coef;
+  real<lower=0> sigma;
+  real sin_coef;
+  real cos_coef;
+}
+
+transformed parameters {
+  vector[N] delta = sin_coef*sin(2*pi()*t) + cos_coef*cos(2*pi()*t);
+  vector[N] mu = intercept + slope*t + quadratic*t^2 + delta;
+}
+
+model {
+  intercept ~ normal(10, 10);
+  slope ~ normal(0, 0.1);
+  quadratic ~ normal(0, 0.01);
+  previous_coef ~ beta(2, 2);
+  previous_2_coef ~ beta(2, 2);
+  sigma ~ exponential(0.5);
+  sin_coef ~ normal(0, 10);
+  cos_coef ~ normal(0, 10);
+  y[1] ~ normal(mu[1], sigma);
+  y[2] ~ normal(mu[2] + previous_coef^((t[2]-t[1])*365.25)*(y[1]-mu[1]), sigma);
+  for (i in 3:N) {
+    y[i] ~ normal(mu[i] +
+                  previous_coef^((t[i]-t[i-1])*365.25)*(y[i-1]-mu[i-1]) +
+                  previous_2_coef^((t[i-1]-t[i-2])*365.25)*(y[i-1]-y[i-2]),
+                  sigma);
+  }
+}
+```
+\normalsize
+\newpage
+## R code
+\footnotesize
+``` {r, eval=FALSE}
+library(tidyverse)
+library(knitr)
+library(rstan)
+library(bayesplot)
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+data0 <- read_csv("data/climate-daily.csv") |>
+  mutate(TOTAL_SNOW_FLAG = as.character(TOTAL_SNOW_FLAG))
+data1 <- read_csv("data/climate-daily (1).csv")
+data2 <- read_csv("data/climate-daily (2).csv")
+data3 <- read_csv("data/climate-daily (3).csv")
+data_raw <- bind_rows(data0, data1, data2, data3)
+
+temp <- data_raw |> select(LOCAL_DATE, MEAN_TEMPERATURE)
+colnames(temp) <- c("date", "mean_temp")
+temp <- temp |> mutate(date = as.Date(date))
+temp_complete <- temp |> drop_na(mean_temp)
+kable(bind_rows(head(temp_complete, 3), tail(temp_complete, 3)))
+
+temp <- temp |> filter(date >= as.Date("1958-01-01"))
+temp_sampling <- temp_complete |>
+  mutate(t = as.numeric(date - as.Date("2000-01-01"))/365.25)
+all_dates <- tibble(date = as.Date(as.Date("1958-01-01"):as.Date("2025-03-12")),
+                    missing = ifelse(date %in% temp_sampling$date,
+                                     0,
+                                     1 + !(date %in% temp$date)))
+ggplot(all_dates, aes(x = date, y = missing)) +
+  geom_point(size = 2, alpha = 0.015) +
+  scale_y_continuous(breaks = c(0, 1, 2), labels = c("Temperature is present",
+                                                     "Temperature is missing",
+                                                     "Row is missing entirely")) +
+  labs(x = "Year") +
+  theme(panel.grid.minor = element_blank(), axis.title.y = element_blank())
+
+all_dates |> summarize(n = n(),
+                       missing_temp = sum(missing == 1),
+                       missing_entirely = sum(missing == 2)) |> kable()
+all_dates |> mutate(weekday = weekdays(date)) |> group_by(weekday) |>
+  summarize(missing = sum(missing != 0)) |> arrange(desc(missing)) |> kable()
+
+temp_fiveyears <- temp_sampling |>
+  filter(date > as.Date("1999-12-31"), date < as.Date("2005-01-01"))
+ggplot(temp_fiveyears, aes(x = date, y = mean_temp)) +
+  geom_point(alpha = 0.3) +
+  labs(x = "Year", y = "Mean temperature (°C)")
+
+fit = stan(
+  file = "temperature.stan",
+  data = list(N = nrow(temp_sampling),
+              t = temp_sampling$t,
+              y = temp_sampling$mean_temp),
+  seed = 447,
+  chains = 2,
+  iter = 1000,
+  refresh = 20)
+
+results <- summary(fit)$summary |> as.data.frame() |>
+  mutate(across(everything(), ~ as.character(signif(., 3))))
+bind_rows(head(results, 7), head(tail(results, 5), 4)) |> select(-10) |> kable()
+
+mcmc_trace(fit, pars = "intercept") + theme_minimal()
+
+mcmc_trace(fit, pars = "slope") + theme_minimal()
+mcmc_trace(fit, pars = "quadratic") + theme_minimal()
+mcmc_trace(fit, pars = "previous_coef") + theme_minimal()
+mcmc_trace(fit, pars = "sigma") + theme_minimal()
+mcmc_trace(fit, pars = "sin_coef") + theme_minimal()
+mcmc_trace(fit, pars = "cos_coef") + theme_minimal()
+mcmc_trace(fit, pars = "estimate2025") + theme_minimal()
+mcmc_trace(fit, pars = "slope2025") + theme_minimal()
+mcmc_trace(fit, pars = "amplitude") + theme_minimal()
+mcmc_trace(fit, pars = "max_day") + theme_minimal()
+```
+\normalsize
